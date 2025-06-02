@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
       await mcpClient.connect(transport);
       
       // Try to list bases to validate the key
-      const result = await mcpClient.callTool({
+      await mcpClient.callTool({
         name: 'list_bases',
         arguments: {}
       });

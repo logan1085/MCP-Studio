@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
+interface ApiKeys {
+  openaiKey: string;
+  airtableKey: string;
+}
+
+interface ToolArguments {
+  [key: string]: unknown;
+}
+
 // Function to create MCP client with user-provided API key
 async function createMCPClient(airtableApiKey: string) {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
@@ -28,7 +37,7 @@ async function createMCPClient(airtableApiKey: string) {
 }
 
 // Function to call MCP function with user's Airtable key
-async function callMCPFunction(toolName: string, arguments_: any, airtableApiKey: string) {
+async function callMCPFunction(toolName: string, arguments_: ToolArguments, airtableApiKey: string) {
   let mcpClient;
   try {
     console.log(`Calling MCP function: ${toolName}`, arguments_);
@@ -78,7 +87,7 @@ async function listMCPTools(airtableApiKey: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, apiKeys } = await request.json();
+    const { messages, apiKeys }: { messages: Array<{role: string; content: string}>; apiKeys: ApiKeys } = await request.json();
 
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json({ error: 'Messages array is required' }, { status: 400 });
