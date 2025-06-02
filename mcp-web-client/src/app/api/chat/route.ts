@@ -10,48 +10,147 @@ interface ToolArguments {
   [key: string]: unknown;
 }
 
-// Function to create MCP client with user-provided API key
-async function createMCPClient(airtableApiKey: string) {
-  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-  const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
-
-  const transport = new StdioClientTransport({
-    command: 'npx',
-    args: ['airtable-mcp-server'],
-    env: {
-      ...process.env,
-      AIRTABLE_API_KEY: airtableApiKey,
-      NODE_ENV: 'production',
-    },
-  });
-
-  const mcpClient = new Client({
-    name: 'mcp-web-client',
-    version: '1.0.0',
-  }, {
-    capabilities: {}
-  });
-
-  await mcpClient.connect(transport);
-  return mcpClient;
+// Custom in-process transport for connecting MCP client and server directly
+class InProcessTransport {
+  private clientTransport: any;
+  private serverTransport: any;
+  
+  constructor() {
+    // Create paired transports
+    this.clientTransport = new InProcessClientTransport();
+    this.serverTransport = new InProcessServerTransport();
+    
+    // Connect them bidirectionally
+    this.clientTransport.setPeer(this.serverTransport);
+    this.serverTransport.setPeer(this.clientTransport);
+  }
+  
+  getClientTransport() {
+    return this.clientTransport;
+  }
+  
+  getServerTransport() {
+    return this.serverTransport;
+  }
 }
 
-// Function to call MCP function with user's Airtable key
-async function callMCPFunction(toolName: string, arguments_: ToolArguments, airtableApiKey: string) {
+class InProcessClientTransport {
+  private peer: any;
+  public onmessage?: (message: any) => void;
+  public onclose?: () => void;
+  public onerror?: (error: Error) => void;
+  public sessionId?: string;
+  
+  constructor() {
+    this.sessionId = Math.random().toString(36).substring(7);
+  }
+  
+  setPeer(peer: any) {
+    this.peer = peer;
+  }
+  
+  async start(): Promise<void> {
+    // Nothing to do for in-process transport
+  }
+  
+  async send(message: any): Promise<void> {
+    // Forward message to server transport
+    if (this.peer && this.peer.onmessage) {
+      // Use setTimeout to make it async
+      setTimeout(() => this.peer.onmessage(message), 0);
+    }
+  }
+  
+  async close(): Promise<void> {
+    if (this.onclose) {
+      this.onclose();
+    }
+  }
+}
+
+class InProcessServerTransport {
+  private peer: any;
+  public onmessage?: (message: any) => void;
+  public onclose?: () => void;
+  public onerror?: (error: Error) => void;
+  public sessionId?: string;
+  
+  constructor() {
+    this.sessionId = Math.random().toString(36).substring(7);
+  }
+  
+  setPeer(peer: any) {
+    this.peer = peer;
+  }
+  
+  async start(): Promise<void> {
+    // Nothing to do for in-process transport
+  }
+  
+  async send(message: any): Promise<void> {
+    // Forward message to client transport
+    if (this.peer && this.peer.onmessage) {
+      // Use setTimeout to make it async
+      setTimeout(() => this.peer.onmessage(message), 0);
+    }
+  }
+  
+  async close(): Promise<void> {
+    if (this.onclose) {
+      this.onclose();
+    }
+  }
+}
+
+// Create real MCP client connected to in-process server
+async function createRealMCPClient(airtableApiKey: string) {
+  try {
+    // Import MCP SDK classes
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { AirtableService } = await import('airtable-mcp-server/dist/airtableService.js');
+    const { AirtableMCPServer } = await import('airtable-mcp-server/dist/mcpServer.js');
+    
+    // Create the in-process transport
+    const transport = new InProcessTransport();
+    
+    // Create and start the MCP server
+    const airtableService = new AirtableService(airtableApiKey);
+    const mcpServer = new AirtableMCPServer(airtableService);
+    await mcpServer.connect(transport.getServerTransport());
+    
+    // Create and connect the MCP client
+    const mcpClient = new Client({
+      name: 'mcp-web-client',
+      version: '1.0.0',
+    }, {
+      capabilities: {}
+    });
+    
+    await mcpClient.connect(transport.getClientTransport());
+    
+    return mcpClient;
+  } catch (error) {
+    console.error('Failed to create real MCP client:', error);
+    throw error;
+  }
+}
+
+// Function to call real MCP functions
+async function callRealMCPFunction(toolName: string, arguments_: any, airtableApiKey: string) {
   let mcpClient;
   try {
-    console.log(`Calling MCP function: ${toolName}`, arguments_);
-    mcpClient = await createMCPClient(airtableApiKey);
+    console.log(`Calling real MCP function: ${toolName}`, arguments_);
+    mcpClient = await createRealMCPClient(airtableApiKey);
     
     const result = await mcpClient.callTool({
       name: toolName,
       arguments: arguments_
     });
 
-    console.log(`MCP function ${toolName} result:`, result);
+    console.log(`Real MCP function ${toolName} result:`, result);
     return result.content;
   } catch (error) {
-    console.error(`MCP function ${toolName} failed:`, error);
+    console.error(`Real MCP function ${toolName} failed:`, error);
     throw error;
   } finally {
     if (mcpClient) {
@@ -64,15 +163,15 @@ async function callMCPFunction(toolName: string, arguments_: ToolArguments, airt
   }
 }
 
-// Function to list MCP tools with user's Airtable key
-async function listMCPTools(airtableApiKey: string) {
+// Function to list real MCP tools
+async function listRealMCPTools(airtableApiKey: string) {
   let mcpClient;
   try {
-    mcpClient = await createMCPClient(airtableApiKey);
+    mcpClient = await createRealMCPClient(airtableApiKey);
     const tools = await mcpClient.listTools();
     return tools.tools;
   } catch (error) {
-    console.error('Error listing MCP tools:', error);
+    console.error('Error listing real MCP tools:', error);
     throw error;
   } finally {
     if (mcpClient) {
@@ -97,38 +196,43 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Both OpenAI and Airtable API keys are required' }, { status: 400 });
     }
 
-    console.log('🔧 Using user-provided API keys for MCP client...');
+    console.log('🔧 Using real in-process MCP with user-provided API keys...');
     
     // Create OpenAI client with user's key
     const openai = new OpenAI({
       apiKey: apiKeys.openaiKey,
     });
 
-    // Get available MCP tools using user's Airtable key
-    const availableTools = await listMCPTools(apiKeys.airtableKey);
-    console.log('Available MCP tools:', availableTools.map(t => t.name));
+    // Get available MCP tools from real MCP server
+    const availableTools = await listRealMCPTools(apiKeys.airtableKey);
+    console.log('Available real MCP tools:', availableTools.map(t => t.name));
 
-    // Add system message with specific instructions for create_record
+    // Add system message with specific instructions
     const systemMessage = {
       role: 'system' as const,
-      content: `You are an AI assistant that helps users manage their Airtable data using MCP (Model Context Protocol) tools.
+      content: `You are an AI assistant that helps users manage their Airtable data using real MCP (Model Context Protocol).
 
-IMPORTANT INSTRUCTIONS FOR create_record:
-- The create_record function REQUIRES a "fields" parameter that is an object containing the field values
-- ALWAYS include the "fields" parameter when calling create_record
+IMPORTANT INSTRUCTIONS:
+- You are connected to a real MCP server running the airtable-mcp-server
+- All tools use the genuine MCP protocol
+- For create_record: ALWAYS include the "fields" parameter as an object
 - Example: {"baseId": "appXXX", "tableId": "tblXXX", "fields": {"Name": "John", "Email": "john@example.com"}}
-- If the user says "add logan, cornell to testing" or similar, use reasonable field names like {"Name": "logan", "Email": "cornell"} or {"First Name": "logan", "Last Name": "cornell"}
+- Get base/table structure first if needed using list_bases and list_tables
+- Be helpful and explain what you're doing
 
-When creating records:
-1. First get the table structure if needed with list_tables or describe_table
-2. Use appropriate field names based on the context
-3. ALWAYS provide the fields parameter as an object`
+This is real MCP in action! Available tools: ${availableTools.map(t => t.name).join(', ')}`
     };
+
+    // Convert messages to proper OpenAI format
+    const openaiMessages = messages.map(msg => ({
+      role: msg.role as 'user' | 'assistant',
+      content: msg.content
+    }));
 
     // Send to OpenAI with available tools
     const response = await openai.chat.completions.create({
       model: 'gpt-4',
-      messages: [systemMessage, ...messages],
+      messages: [systemMessage, ...openaiMessages],
       tools: availableTools.map(tool => ({
         type: 'function' as const,
         function: {
@@ -148,13 +252,13 @@ When creating records:
 
     // Check if AI wants to call tools
     if (message.tool_calls) {
-      console.log('🔧 AI requested MCP tool calls:', message.tool_calls.map(t => t.function.name));
+      console.log('🔧 AI requested real MCP tool calls:', message.tool_calls.map(t => t.function.name));
       
-      // Execute MCP tool calls using user's Airtable key
+      // Execute real MCP tool calls
       const toolResults = [];
       for (const toolCall of message.tool_calls) {
         try {
-          const result = await callMCPFunction(
+          const result = await callRealMCPFunction(
             toolCall.function.name,
             JSON.parse(toolCall.function.arguments),
             apiKeys.airtableKey
@@ -166,9 +270,9 @@ When creating records:
             content: typeof result === 'string' ? result : JSON.stringify(result)
           });
           
-          console.log(`✅ MCP tool ${toolCall.function.name} executed successfully`);
+          console.log(`✅ Real MCP tool ${toolCall.function.name} executed successfully`);
         } catch (error) {
-          console.error(`❌ MCP tool ${toolCall.function.name} failed:`, error);
+          console.error(`❌ Real MCP tool ${toolCall.function.name} failed:`, error);
           toolResults.push({
             tool_call_id: toolCall.id,
             role: 'tool' as const,
@@ -182,7 +286,7 @@ When creating records:
         model: 'gpt-4',
         messages: [
           systemMessage,
-          ...messages,
+          ...openaiMessages,
           message,
           ...toolResults
         ]
@@ -192,7 +296,7 @@ When creating records:
       
       return NextResponse.json({
         role: 'assistant',
-        content: finalMessage?.content || 'I completed the requested actions.',
+        content: finalMessage?.content || 'I completed the requested MCP actions.',
         toolCalls: message.tool_calls
       });
     }
@@ -204,7 +308,7 @@ When creating records:
     });
     
   } catch (error) {
-    console.error('❌ Chat API error:', error);
+    console.error('❌ Real MCP API error:', error);
     
     // Provide more specific error messages
     if (error instanceof Error) {
@@ -221,7 +325,7 @@ When creating records:
     }
     
     return NextResponse.json({
-      error: 'Sorry, there was an error processing your request. Please try again or check your API keys.'
+      error: 'Sorry, there was an error processing your MCP request. Please try again or check your API keys.'
     }, { status: 500 });
   }
 } 

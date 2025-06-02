@@ -25,41 +25,24 @@ export async function POST(request: NextRequest) {
       }, { status: 401 });
     }
 
-    // Test Airtable API Key (we'll do this via MCP in a simple way)
+    // Test Airtable API Key with direct API call (Vercel-compatible)
     try {
-      // Create a test MCP client to validate Airtable connection
-      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-      const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
-
-      const transport = new StdioClientTransport({
-        command: 'npx',
-        args: ['airtable-mcp-server'],
-        env: {
-          ...process.env,
-          AIRTABLE_API_KEY: apiKeys.airtableKey,
-          NODE_ENV: 'production',
-        },
+      // Validate Airtable key by making a direct API call to list bases
+      const airtableResponse = await fetch('https://api.airtable.com/v0/meta/bases', {
+        headers: {
+          'Authorization': `Bearer ${apiKeys.airtableKey}`,
+          'Content-Type': 'application/json'
+        }
       });
 
-      const mcpClient = new Client({
-        name: 'mcp-web-client-validator',
-        version: '1.0.0',
-      }, {
-        capabilities: {}
-      });
+      if (!airtableResponse.ok) {
+        const errorData = await airtableResponse.text();
+        console.error('❌ Airtable API validation failed:', airtableResponse.status, errorData);
+        throw new Error(`Airtable API returned ${airtableResponse.status}`);
+      }
 
-      await mcpClient.connect(transport);
-      
-      // Try to list bases to validate the key
-      await mcpClient.callTool({
-        name: 'list_bases',
-        arguments: {}
-      });
-
-      // Close the connection
-      await mcpClient.close();
-      
-      console.log('✅ Airtable API key is valid');
+      const airtableData = await airtableResponse.json();
+      console.log('✅ Airtable API key is valid - found', airtableData.bases?.length || 0, 'bases');
     } catch (error) {
       console.error('❌ Airtable API key validation failed:', error);
       return NextResponse.json({ 
